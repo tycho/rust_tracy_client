@@ -103,7 +103,7 @@ fn build_tracy_client() {
         if let Ok(tool) = builder.try_get_compiler() {
             if tool.is_like_gnu() || tool.is_like_clang() {
                 // https://github.com/rust-lang/cc-rs/issues/855
-                builder.flag("-std=c++11");
+                builder.flag("-std=c++20");
             }
         }
         let _ = builder.try_flags_from_environment("TRACY_CLIENT_SYS_CXXFLAGS");
