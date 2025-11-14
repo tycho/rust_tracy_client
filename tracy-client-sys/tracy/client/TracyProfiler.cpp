@@ -6,6 +6,7 @@
 #  endif
 #  include <winsock2.h>
 #  include <windows.h>
+#  include <winternl.h>
 #  include <tlhelp32.h>
 #  include <inttypes.h>
 #  include <intrin.h>
@@ -80,6 +81,7 @@
 #include "TracyScoped.hpp"
 #include "TracyProfiler.hpp"
 #include "TracyThread.hpp"
+#include "TracyTimer.hpp"
 #include "TracyArmCpuTable.hpp"
 #include "TracySysTrace.hpp"
 #include "../tracy/TracyC.h"
@@ -282,14 +284,17 @@ static bool EnsureReadable( uintptr_t address )
     return mapping && EnsureReadable( *mapping );
 }
 #elif defined WIN32
-static bool EnsureReadable( uintptr_t address )
+[[maybe_unused]] static bool EnsureReadable( uintptr_t address )
 {
-    MEMORY_BASIC_INFORMATION memInfo;
-    VirtualQuery( reinterpret_cast<void*>( address ), &memInfo, sizeof( memInfo ) );
-    return memInfo.Protect != PAGE_NOACCESS;
+    // Attempts to read an address with ReadProcessMemory. Trying to read an
+    // invalid address will ordinarily result in a crash, but ReadProcessMemory
+    // handles that exception and turns it into a return value.
+    uint32_t testRead;
+    SIZE_T bytesRead;
+    return ReadProcessMemory(GetCurrentProcess(), (LPVOID)address, &testRead, 1, &bytesRead) != 0 && bytesRead == 1;
 }
 #else
-static bool EnsureReadable( uintptr_t address )
+[[maybe_unused]] static bool EnsureReadable( uintptr_t address )
 {
     return true;
 }
@@ -324,103 +329,12 @@ static inline void CpuId( uint32_t* regs, uint32_t leaf )
     __get_cpuid( leaf, regs, regs+1, regs+2, regs+3 );
 #endif
 }
-
-static void InitFailure( const char* msg )
-{
-#if defined TRACY_GDK
-    const char* format = "Tracy Profiler initialization failure: %s\n";
-    const int length = snprintf( nullptr, 0, format, msg );
-    char* buffer = (char*)alloca( length + 1 );
-    snprintf( buffer, length + 1, format, msg );
-    OutputDebugStringA( buffer );
-#elif defined _WIN32
-    bool hasConsole = false;
-    bool reopen = false;
-    const auto attached = AttachConsole( ATTACH_PARENT_PROCESS );
-    if( attached )
-    {
-        hasConsole = true;
-        reopen = true;
-    }
-    else
-    {
-        const auto err = GetLastError();
-        if( err == ERROR_ACCESS_DENIED )
-        {
-            hasConsole = true;
-        }
-    }
-    if( hasConsole )
-    {
-        fprintf( stderr, "Tracy Profiler initialization failure: %s\n", msg );
-        if( reopen )
-        {
-            freopen( "CONOUT$", "w", stderr );
-            fprintf( stderr, "Tracy Profiler initialization failure: %s\n", msg );
-        }
-    }
-    else
-    {
-#  ifndef TRACY_UWP
-        MessageBoxA( nullptr, msg, "Tracy Profiler initialization failure", MB_ICONSTOP );
-#  endif
-    }
-#else
-    fprintf( stderr, "Tracy Profiler initialization failure: %s\n", msg );
-#endif
-    exit( 1 );
-}
-
-static bool CheckHardwareSupportsInvariantTSC()
-{
-    const char* noCheck = GetEnvVar( "TRACY_NO_INVARIANT_CHECK" );
-    if( noCheck && noCheck[0] == '1' ) return true;
-
-    uint32_t regs[4];
-    CpuId( regs, 1 );
-    if( !( regs[3] & ( 1 << 4 ) ) )
-    {
-#if !defined TRACY_TIMER_QPC && !defined TRACY_TIMER_FALLBACK
-        InitFailure( "CPU doesn't support RDTSC instruction." );
-#else
-        return false;
-#endif
-    }
-    CpuId( regs, 0x80000007 );
-    if( regs[3] & ( 1 << 8 ) ) return true;
-
-    return false;
-}
-
-#if defined TRACY_TIMER_FALLBACK && defined TRACY_HW_TIMER
-bool HardwareSupportsInvariantTSC()
-{
-    static bool cachedResult = CheckHardwareSupportsInvariantTSC();
-    return cachedResult;
-}
 #endif
 
 static int64_t SetupHwTimer()
 {
-#if !defined TRACY_TIMER_QPC && !defined TRACY_TIMER_FALLBACK
-    if( !CheckHardwareSupportsInvariantTSC() )
-    {
-#if defined _WIN32
-        InitFailure( "CPU doesn't support invariant TSC.\nDefine TRACY_NO_INVARIANT_CHECK=1 to ignore this error, *if you know what you are doing*.\nAlternatively you may rebuild the application with the TRACY_TIMER_QPC or TRACY_TIMER_FALLBACK define to use lower resolution timer." );
-#else
-        InitFailure( "CPU doesn't support invariant TSC.\nDefine TRACY_NO_INVARIANT_CHECK=1 to ignore this error, *if you know what you are doing*.\nAlternatively you may rebuild the application with the TRACY_TIMER_FALLBACK define to use lower resolution timer." );
-#endif
-    }
-#endif
-
     return Profiler::GetTime();
 }
-#else
-static int64_t SetupHwTimer()
-{
-    return Profiler::GetTime();
-}
-#endif
 
 static const char* GetProcessName()
 {
@@ -610,39 +524,50 @@ static const char* GetHostInfo()
     ptr += sprintf( ptr, "User: %s@%s\n", user, hostname );
 #else
     char hostname[_POSIX_HOST_NAME_MAX]{};
-    char user[_POSIX_LOGIN_NAME_MAX]{};
-
     gethostname( hostname, _POSIX_HOST_NAME_MAX );
 #  if defined __ANDROID__
     const auto login = getlogin();
     if( login )
     {
-        strcpy( user, login );
+        ptr += sprintf( ptr, "User: %s@%s\n", login, hostname );
     }
     else
     {
-        memcpy( user, "(?)", 4 );
+        ptr += sprintf( ptr, "User: (?)@%s\n", hostname );
     }
 #  else
+    char user[_POSIX_LOGIN_NAME_MAX]{};
     getlogin_r( user, _POSIX_LOGIN_NAME_MAX );
-#  endif
-
     ptr += sprintf( ptr, "User: %s@%s\n", user, hostname );
+#  endif
 #endif
 
 #if defined __i386 || defined _M_IX86
     ptr += sprintf( ptr, "Arch: x86\n" );
 #elif defined __x86_64__ || defined _M_X64
     ptr += sprintf( ptr, "Arch: x64\n" );
-#elif defined __aarch64__
+#elif defined __aarch64__ || defined _M_ARM64
     ptr += sprintf( ptr, "Arch: ARM64\n" );
-#elif defined __ARM_ARCH
+#elif defined __ARM_ARCH || defined _M_ARM
     ptr += sprintf( ptr, "Arch: ARM\n" );
 #else
     ptr += sprintf( ptr, "Arch: unknown\n" );
 #endif
 
-#if defined __i386 || defined _M_IX86 || defined __x86_64__ || defined _M_X64
+#if defined _WIN32
+    char cpuModel[64] = "unknown";
+    HKEY hKey;
+    DWORD valType, valSize = sizeof( cpuModel );
+    if( RegOpenKeyExW( HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", 0, KEY_READ, &hKey ) == ERROR_SUCCESS )
+    {
+        if( !RegQueryValueExA( hKey, "ProcessorNameString", nullptr, &valType, (PBYTE)cpuModel, &valSize ) )
+        {
+            if ( valType != REG_SZ || !strlen( cpuModel ) ) sprintf( cpuModel, "unknown" );
+        }
+        RegCloseKey( hKey );
+    }
+    ptr += sprintf( ptr, "CPU: %s\n", cpuModel );
+#elif defined __i386 || defined _M_IX86 || defined __x86_64__ || defined _M_X64
     uint32_t regs[4];
     char cpuModel[4*4*3+1] = {};
     auto modelPtr = cpuModel;
@@ -1194,6 +1119,8 @@ static void StartSystemTracing( int64_t& samplingPeriod )
 
 static void StopSystemTracing()
 {
+    static std::mutex sysTraceStopMutex;
+    std::lock_guard<std::mutex> lock( sysTraceStopMutex );
     if( s_sysTraceThread )
     {
         SysTraceStop();
@@ -1221,17 +1148,6 @@ void Profiler::EndSamplingProfiling()
 }
 
 enum { QueuePrealloc = 256 * 1024 };
-
-TRACY_API int64_t GetFrequencyQpc()
-{
-#if defined _WIN32
-    LARGE_INTEGER t;
-    QueryPerformanceFrequency( &t );
-    return t.QuadPart;
-#else
-    return 0;
-#endif
-}
 
 #ifdef TRACY_DELAYED_INIT
 struct ThreadNameData;
@@ -1514,7 +1430,6 @@ Profiler::Profiler()
 #  endif
 #endif
 
-    CalibrateTimer();
     CalibrateDelay();
     ReportTopology();
 
@@ -1784,7 +1699,7 @@ void Profiler::Worker()
     uint8_t cpuArch = CpuArchX86;
 #elif defined __x86_64__ || defined _M_X64
     uint8_t cpuArch = CpuArchX64;
-#elif defined __aarch64__
+#elif defined __aarch64__ || defined _M_ARM64
     uint8_t cpuArch = CpuArchArm64;
 #elif defined __ARM_ARCH
     uint8_t cpuArch = CpuArchArm32;
@@ -1808,7 +1723,6 @@ void Profiler::Worker()
 #endif
 
     WelcomeMessage welcome;
-    MemWrite( &welcome.timerMul, m_timerMul );
     MemWrite( &welcome.initBegin, GetInitTime() );
     MemWrite( &welcome.initEnd, m_timeBegin.load( std::memory_order_relaxed ) );
     MemWrite( &welcome.resolution, m_resolution );
@@ -3199,18 +3113,7 @@ char* Profiler::SafeCopyProlog( const char* data, size_t size )
     if( size > SafeSendBufferSize ) buf = (char*)tracy_malloc( size );
 
 #ifdef _WIN32
-#  ifdef _MSC_VER
-    __try
-    {
-        memcpy( buf, data, size );
-    }
-    __except( 1 /*EXCEPTION_EXECUTE_HANDLER*/ )
-    {
-        success = false;
-    }
-#  else
-    memcpy( buf, data, size );
-#  endif
+    success = ReadProcessMemory( GetCurrentProcess(), data, buf, size, nullptr ) != 0;
 #else
     // Send through the pipe to ensure safe reads
     for( size_t offset = 0; offset != size; /*in loop*/ )
@@ -3835,37 +3738,6 @@ void Profiler::HandleDisconnect()
     }
 }
 
-void Profiler::CalibrateTimer()
-{
-    m_timerMul = 1.;
-
-#ifdef TRACY_HW_TIMER
-
-#  if !defined TRACY_TIMER_QPC && defined TRACY_TIMER_FALLBACK
-    const bool needCalibration = HardwareSupportsInvariantTSC();
-#  else
-    const bool needCalibration = true;
-#  endif
-    if( needCalibration )
-    {
-        std::atomic_signal_fence( std::memory_order_acq_rel );
-        const auto t0 = std::chrono::high_resolution_clock::now();
-        const auto r0 = GetTime();
-        std::atomic_signal_fence( std::memory_order_acq_rel );
-        std::this_thread::sleep_for( std::chrono::milliseconds( 200 ) );
-        std::atomic_signal_fence( std::memory_order_acq_rel );
-        const auto t1 = std::chrono::high_resolution_clock::now();
-        const auto r1 = GetTime();
-        std::atomic_signal_fence( std::memory_order_acq_rel );
-
-        const auto dt = std::chrono::duration_cast<std::chrono::nanoseconds>( t1 - t0 ).count();
-        const auto dr = r1 - r0;
-
-        m_timerMul = double( dt ) / double( dr );
-    }
-#endif
-}
-
 void Profiler::CalibrateDelay()
 {
     constexpr int Iterations = 50000;
@@ -3909,7 +3781,7 @@ void Profiler::ReportTopology()
     if( GetLastError() == ERROR_INSUFFICIENT_BUFFER )
     {
         packageInfo = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)tracy_malloc( psz );
-        auto res = _GetLogicalProcessorInformationEx( RelationProcessorPackage, packageInfo, &psz );
+        [[maybe_unused]] auto res = _GetLogicalProcessorInformationEx( RelationProcessorPackage, packageInfo, &psz );
         assert( res );
     }
     else
@@ -3922,7 +3794,7 @@ void Profiler::ReportTopology()
     if( GetLastError() == ERROR_INSUFFICIENT_BUFFER )
     {
         dieInfo = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)tracy_malloc( dsz );
-        auto res = _GetLogicalProcessorInformationEx( RelationProcessorDie, dieInfo, &dsz );
+        [[maybe_unused]] auto res = _GetLogicalProcessorInformationEx( RelationProcessorDie, dieInfo, &dsz );
         assert( res );
     }
     else
@@ -3935,7 +3807,7 @@ void Profiler::ReportTopology()
     if( GetLastError() == ERROR_INSUFFICIENT_BUFFER )
     {
         coreInfo = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)tracy_malloc( csz );
-        auto res = _GetLogicalProcessorInformationEx( RelationProcessorCore, coreInfo, &csz );
+        [[maybe_unused]] auto res = _GetLogicalProcessorInformationEx( RelationProcessorCore, coreInfo, &csz );
         assert( res );
     }
     else
@@ -4277,15 +4149,6 @@ void Profiler::HandleSourceCodeQuery( char* data, char* image, uint32_t id )
     tracy_free_fast( data );
     tracy_free_fast( image );
 }
-
-#if defined _WIN32 && defined TRACY_TIMER_QPC
-int64_t Profiler::GetTimeQpc()
-{
-    LARGE_INTEGER t;
-    QueryPerformanceCounter( &t );
-    return t.QuadPart;
-}
-#endif
 
 }
 

@@ -231,7 +231,7 @@ private:
         const auto startAddress = static_cast<uint64_t>( info->dlpi_addr );
         if( cache->ContainsImage( startAddress ) ) return 0;
 
-        const uint32_t headerCount = info->dlpi_phnum;
+        [[maybe_unused]] const uint32_t headerCount = info->dlpi_phnum;
         assert( headerCount > 0);
         const auto endAddress = static_cast<uint64_t>( info->dlpi_addr +
             info->dlpi_phdr[info->dlpi_phnum - 1].p_vaddr + info->dlpi_phdr[info->dlpi_phnum - 1].p_memsz);
@@ -369,6 +369,7 @@ extern "C"
     ___tracy_t_RtlWalkFrameChain ___tracy_RtlWalkFrameChainPtr = nullptr;
     TRACY_API unsigned long ___tracy_RtlWalkFrameChain( void** callers, unsigned long count, unsigned long flags)
     {
+        if( !___tracy_RtlWalkFrameChainPtr ) InitCallstackCritical();
         return ___tracy_RtlWalkFrameChainPtr(callers, count, flags);
     }
 }
@@ -393,7 +394,7 @@ void DbgHelpInit()
 #endif
 
     SymInitialize( GetCurrentProcess(), nullptr, true );
-    SymSetOptions( SYMOPT_LOAD_LINES );
+    SymSetOptions( SYMOPT_LOAD_LINES | SYMOPT_DEFERRED_LOADS );
 
 #ifdef TRACY_DBGHELP_LOCK
     DBGHELP_UNLOCK;

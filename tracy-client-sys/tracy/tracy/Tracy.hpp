@@ -62,6 +62,7 @@
 #define LockableBase( type ) type
 #define SharedLockableBase( type ) type
 #define LockMark(x) (void)x
+#define LockMarkNamed(x,y) (void)y
 #define LockableName(x,y,z)
 
 #define TracyPlot(x,y)
@@ -157,7 +158,7 @@
         _Pragma("clang diagnostic ignored \"-Wshadow\"") \
         Expr \
         _Pragma("clang diagnostic pop")
-#elif defined(__GNU__)
+#elif defined(__GNUC__)
     #define SuppressVarShadowWarning(Expr) \
         _Pragma("GCC diagnostic push") \
         _Pragma("GCC diagnostic ignored \"-Wshadow\"") \
@@ -207,6 +208,7 @@
 #define LockableBase( type ) tracy::Lockable<type>
 #define SharedLockableBase( type ) tracy::SharedLockable<type>
 #define LockMark( varname ) static constexpr tracy::SourceLocationData TracyConcat(__tracy_lock_location_,TracyLine) { nullptr, TracyFunction,  TracyFile, (uint32_t)TracyLine, 0 }; varname.Mark( &TracyConcat(__tracy_lock_location_,TracyLine) )
+#define LockMarkNamed( varname, lockname ) static constexpr tracy::SourceLocationData TracyConcat(__tracy_lock_location_,TracyLine) { nullptr, TracyFunction,  TracyFile, (uint32_t)TracyLine, 0 }; lockname.Mark( &TracyConcat(__tracy_lock_location_,TracyLine) )
 #define LockableName( varname, txt, size ) varname.CustomName( txt, size )
 
 #define TracyPlot( name, val ) tracy::Profiler::PlotData( name, val )
