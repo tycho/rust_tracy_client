@@ -62,6 +62,7 @@
 #define LockableBase( type ) type
 #define SharedLockableBase( type ) type
 #define LockMark(x) (void)x
+#define LockMarkNamed(x,y) (void)y
 #define LockableName(x,y,z)
 
 #define TracyPlot(x,y)
@@ -207,6 +208,7 @@
 #define LockableBase( type ) tracy::Lockable<type>
 #define SharedLockableBase( type ) tracy::SharedLockable<type>
 #define LockMark( varname ) static constexpr tracy::SourceLocationData TracyConcat(__tracy_lock_location_,TracyLine) { nullptr, TracyFunction,  TracyFile, (uint32_t)TracyLine, 0 }; varname.Mark( &TracyConcat(__tracy_lock_location_,TracyLine) )
+#define LockMarkNamed( varname, lockname ) static constexpr tracy::SourceLocationData TracyConcat(__tracy_lock_location_,TracyLine) { nullptr, TracyFunction,  TracyFile, (uint32_t)TracyLine, 0 }; lockname.Mark( &TracyConcat(__tracy_lock_location_,TracyLine) )
 #define LockableName( varname, txt, size ) varname.CustomName( txt, size )
 
 #define TracyPlot( name, val ) tracy::Profiler::PlotData( name, val )
@@ -214,10 +216,12 @@
 
 #define TracyAppInfo( txt, size ) tracy::Profiler::MessageAppInfo( txt, size )
 
-#define TracyMessage( txt, size ) tracy::Profiler::Message( txt, size, TRACY_CALLSTACK )
-#define TracyMessageL( txt ) tracy::Profiler::Message( txt, TRACY_CALLSTACK )
-#define TracyMessageC( txt, size, color ) tracy::Profiler::MessageColor( txt, size, color, TRACY_CALLSTACK )
-#define TracyMessageLC( txt, color ) tracy::Profiler::MessageColor( txt, color, TRACY_CALLSTACK )
+#define TracyLogString( severity, color, depth, ... ) tracy::Profiler::LogString( tracy::MessageSourceType::User, severity, color, depth, __VA_ARGS__ )
+
+#define TracyMessage( txt, size ) tracy::Profiler::LogString( tracy::MessageSourceType::User, tracy::MessageSeverity::Info, 0, TRACY_CALLSTACK, size, txt )
+#define TracyMessageL( txt ) tracy::Profiler::LogString( tracy::MessageSourceType::User, tracy::MessageSeverity::Info, 0, TRACY_CALLSTACK, txt )
+#define TracyMessageC( txt, size, color ) tracy::Profiler::LogString( tracy::MessageSourceType::User, tracy::MessageSeverity::Info, color, TRACY_CALLSTACK, size, txt )
+#define TracyMessageLC( txt, color ) tracy::Profiler::LogString( tracy::MessageSourceType::User, tracy::MessageSeverity::Info, color, TRACY_CALLSTACK, txt )
 
 #define TracyAlloc( ptr, size ) tracy::Profiler::MemAllocCallstack( ptr, size, TRACY_CALLSTACK, false )
 #define TracyFree( ptr ) tracy::Profiler::MemFreeCallstack( ptr, TRACY_CALLSTACK, false )
@@ -256,10 +260,10 @@
 #define TracySecureFreeNS( ptr, depth, name ) tracy::Profiler::MemFreeCallstackNamed( ptr, depth, true, name )
 #define TracySecureMemoryDiscardS( name, depth ) tracy::Profiler::MemDiscardCallstack( name, true, depth )
 
-#define TracyMessageS( txt, size, depth ) tracy::Profiler::Message( txt, size, depth )
-#define TracyMessageLS( txt, depth ) tracy::Profiler::Message( txt, depth )
-#define TracyMessageCS( txt, size, color, depth ) tracy::Profiler::MessageColor( txt, size, color, depth )
-#define TracyMessageLCS( txt, color, depth ) tracy::Profiler::MessageColor( txt, color, depth )
+#define TracyMessageS( txt, size, depth ) tracy::Profiler::LogString( tracy::MessageSourceType::User, tracy::MessageSeverity::Info, 0, depth, size, txt )
+#define TracyMessageLS( txt, depth ) tracy::Profiler::LogString( tracy::MessageSourceType::User, tracy::MessageSeverity::Info, 0, depth, txt )
+#define TracyMessageCS( txt, size, color, depth ) tracy::Profiler::LogString( tracy::MessageSourceType::User, tracy::MessageSeverity::Info, color, depth, size, txt )
+#define TracyMessageLCS( txt, color, depth ) tracy::Profiler::LogString( tracy::MessageSourceType::User, tracy::MessageSeverity::Info, color, depth, txt )
 
 #define TracySourceCallbackRegister( cb, data ) tracy::Profiler::SourceCallbackRegister( cb, data )
 #define TracyParameterRegister( cb, data ) tracy::Profiler::ParameterRegister( cb, data )

@@ -13,6 +13,7 @@
 #include "TracyKCore.hpp"
 #include "TracySysPower.hpp"
 #include "TracySysTime.hpp"
+#include "TracyTimer.hpp"
 #include "TracyFastVector.hpp"
 #include "../common/TracyQueue.hpp"
 #include "../common/TracyAlign.hpp"
@@ -20,24 +21,8 @@
 #include "../common/TracyMutex.hpp"
 #include "../common/TracyProtocol.hpp"
 
-#if defined _WIN32
-#  include <intrin.h>
-#endif
-#ifdef __APPLE__
-#  include <TargetConditionals.h>
-#  include <mach/mach_time.h>
-#endif
-
-#if ( (defined _WIN32 && !(defined _M_ARM64 || defined _M_ARM)) || ( defined __i386 || defined _M_IX86 || defined __x86_64__ || defined _M_X64 ) || ( defined TARGET_OS_IOS && TARGET_OS_IOS == 1 ) )
-#  define TRACY_HW_TIMER
-#endif
-
 #ifdef __linux__
 #  include <signal.h>
-#endif
-
-#if defined TRACY_TIMER_FALLBACK || !defined TRACY_HW_TIMER
-#  include <chrono>
 #endif
 
 #ifndef TracyConcat
@@ -79,24 +64,6 @@ TRACY_API GpuCtxWrapper& GetGpuCtx();
 TRACY_API uint32_t GetThreadHandle();
 TRACY_API bool ProfilerAvailable();
 TRACY_API bool ProfilerAllocatorAvailable();
-TRACY_API int64_t GetFrequencyQpc();
-
-#if defined TRACY_TIMER_FALLBACK && defined TRACY_HW_TIMER && ( defined __i386 || defined _M_IX86 || defined __x86_64__ || defined _M_X64 )
-TRACY_API bool HardwareSupportsInvariantTSC();  // check, if we need fallback scenario
-#else
-#  if defined TRACY_HW_TIMER
-tracy_force_inline bool HardwareSupportsInvariantTSC()
-{
-    return true;  // this is checked at startup
-}
-#  else
-tracy_force_inline bool HardwareSupportsInvariantTSC()
-{
-    return false;
-}
-#  endif
-#endif
-
 
 struct SourceLocationData
 {
@@ -197,62 +164,7 @@ public:
 
     static tracy_force_inline int64_t GetTime()
     {
-#ifdef TRACY_HW_TIMER
-#  if defined TARGET_OS_IOS && TARGET_OS_IOS == 1
-        if( HardwareSupportsInvariantTSC() ) return mach_absolute_time();
-#  elif defined _WIN32
-#    ifdef TRACY_TIMER_QPC
-        return GetTimeQpc();
-#    else
-        if( HardwareSupportsInvariantTSC() ) return int64_t( __rdtsc() );
-#    endif
-#  elif defined __i386 || defined _M_IX86
-        if( HardwareSupportsInvariantTSC() )
-        {
-            uint32_t eax, edx;
-            asm volatile ( "rdtsc" : "=a" (eax), "=d" (edx) );
-            return ( uint64_t( edx ) << 32 ) + uint64_t( eax );
-        }
-#  elif defined __x86_64__ || defined _M_X64
-        if( HardwareSupportsInvariantTSC() )
-        {
-            uint64_t rax, rdx;
-#ifdef TRACY_PATCHABLE_NOPSLEDS
-            // Some external tooling (such as rr) wants to patch our rdtsc and replace it by a
-            // branch to control the external input seen by a program. This kind of patching is
-            // not generally possible depending on the surrounding code and can lead to significant
-            // slowdowns if the compiler generated unlucky code and rr and tracy are used together.
-            // To avoid this, use the rr-safe `nopl 0(%rax, %rax, 1); rdtsc` instruction sequence,
-            // which rr promises will be patchable independent of the surrounding code.
-            asm volatile (
-                    // This is nopl 0(%rax, %rax, 1), but assemblers are inconsistent about whether
-                    // they emit that as a 4 or 5 byte sequence and we need to be guaranteed to use
-                    // the 5 byte one.
-                    ".byte 0x0f, 0x1f, 0x44, 0x00, 0x00\n\t"
-                    "rdtsc" : "=a" (rax), "=d" (rdx) );
-#else
-            asm volatile ( "rdtsc" : "=a" (rax), "=d" (rdx) );
-#endif
-            return (int64_t)(( rdx << 32 ) + rax);
-        }
-#  else
-#    error "TRACY_HW_TIMER detection logic needs fixing"
-#  endif
-#endif
-
-#if !defined TRACY_HW_TIMER || defined TRACY_TIMER_FALLBACK
-#  if defined __linux__ && defined CLOCK_MONOTONIC_RAW
-        struct timespec ts;
-        clock_gettime( CLOCK_MONOTONIC_RAW, &ts );
-        return int64_t( ts.tv_sec ) * 1000000000ll + int64_t( ts.tv_nsec );
-#  else
-        return std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::high_resolution_clock::now().time_since_epoch() ).count();
-#  endif
-#endif
-
-#if !defined TRACY_TIMER_FALLBACK
-        return 0;  // unreachable branch
-#endif
+        return high_res_time::now().time_since_epoch().count();
     }
 
     bool BeginSamplingProfiling();
@@ -392,10 +304,10 @@ public:
 
         TracyLfqCommit;
     }
-
-    static tracy_force_inline void Message( const char* txt, size_t size, int32_t callstack_depth )
+    
+    static tracy_force_inline void LogString( MessageSourceType source, MessageSeverity severity, uint32_t color, int32_t callstack_depth, size_t txtLength, const char* txt )
     {
-        assert( size < (std::numeric_limits<uint16_t>::max)() );
+        assert( txtLength < (std::numeric_limits<uint16_t>::max)() );
 #ifdef TRACY_ON_DEMAND
         if( !GetProfiler().IsConnected() ) return;
 #endif
@@ -404,57 +316,32 @@ public:
             tracy::GetProfiler().SendCallstack( callstack_depth );
         }
 
-        auto ptr = (char*)tracy_malloc( size );
-        memcpy( ptr, txt, size );
+        auto ptr = (char*)tracy_malloc( txtLength );
+        memcpy( ptr, txt, txtLength );
+        TaggedUserlandAddress taggedPtr{ (uint64_t)ptr, MakeMessageMetadata( source, severity ) };
 
-        TracyQueuePrepare( callstack_depth == 0 ? QueueType::Message : QueueType::MessageCallstack );
-        MemWrite( &item->messageFat.time, GetTime() );
-        MemWrite( &item->messageFat.text, (uint64_t)ptr );
-        MemWrite( &item->messageFat.size, (uint16_t)size );
-        TracyQueueCommit( messageFatThread );
-    }
-
-    static tracy_force_inline void Message( const char* txt, int32_t callstack_depth )
-    {
-#ifdef TRACY_ON_DEMAND
-        if( !GetProfiler().IsConnected() ) return;
-#endif
-        if( callstack_depth != 0 && has_callstack() )
+        if( color != 0 )
         {
-            tracy::GetProfiler().SendCallstack( callstack_depth );
+            TracyQueuePrepare( callstack_depth == 0 ? QueueType::MessageColor : QueueType::MessageColorCallstack );
+            MemWrite( &item->messageColorFat.time, GetTime() );
+            MemWrite( &item->messageColorFat.textAndMetadata, taggedPtr );
+            MemWrite( &item->messageColorFat.b, uint8_t( ( color       ) & 0xFF ) );
+            MemWrite( &item->messageColorFat.g, uint8_t( ( color >> 8  ) & 0xFF ) );
+            MemWrite( &item->messageColorFat.r, uint8_t( ( color >> 16 ) & 0xFF ) );
+            MemWrite( &item->messageColorFat.size, (uint16_t)txtLength );
+            TracyQueueCommit( messageColorFatThread );
         }
-
-        TracyQueuePrepare( callstack_depth == 0 ? QueueType::MessageLiteral : QueueType::MessageLiteralCallstack );
-        MemWrite( &item->messageLiteral.time, GetTime() );
-        MemWrite( &item->messageLiteral.text, (uint64_t)txt );
-        TracyQueueCommit( messageLiteralThread );
-    }
-
-    static tracy_force_inline void MessageColor( const char* txt, size_t size, uint32_t color, int32_t callstack_depth )
-    {
-        assert( size < (std::numeric_limits<uint16_t>::max)() );
-#ifdef TRACY_ON_DEMAND
-        if( !GetProfiler().IsConnected() ) return;
-#endif
-        if( callstack_depth != 0 && has_callstack() )
+        else
         {
-            tracy::GetProfiler().SendCallstack( callstack_depth );
+            TracyQueuePrepare( callstack_depth == 0 ? QueueType::Message : QueueType::MessageCallstack );
+            MemWrite( &item->messageFat.time, GetTime() );
+            MemWrite( &item->messageFat.textAndMetadata, taggedPtr );
+            MemWrite( &item->messageFat.size, (uint16_t)txtLength );
+            TracyQueueCommit( messageFatThread );
         }
-
-        auto ptr = (char*)tracy_malloc( size );
-        memcpy( ptr, txt, size );
-
-        TracyQueuePrepare( callstack_depth == 0 ? QueueType::MessageColor : QueueType::MessageColorCallstack );
-        MemWrite( &item->messageColorFat.time, GetTime() );
-        MemWrite( &item->messageColorFat.text, (uint64_t)ptr );
-        MemWrite( &item->messageColorFat.b, uint8_t( ( color       ) & 0xFF ) );
-        MemWrite( &item->messageColorFat.g, uint8_t( ( color >> 8  ) & 0xFF ) );
-        MemWrite( &item->messageColorFat.r, uint8_t( ( color >> 16 ) & 0xFF ) );
-        MemWrite( &item->messageColorFat.size, (uint16_t)size );
-        TracyQueueCommit( messageColorFatThread );
     }
 
-    static tracy_force_inline void MessageColor( const char* txt, uint32_t color, int32_t callstack_depth )
+    static tracy_force_inline void LogString( MessageSourceType source, MessageSeverity severity, uint32_t color, int32_t callstack_depth, const char* txt )
     {
 #ifdef TRACY_ON_DEMAND
         if( !GetProfiler().IsConnected() ) return;
@@ -464,23 +351,38 @@ public:
             tracy::GetProfiler().SendCallstack( callstack_depth );
         }
 
-        TracyQueuePrepare( callstack_depth == 0 ? QueueType::MessageLiteralColor : QueueType::MessageLiteralColorCallstack );
-        MemWrite( &item->messageColorLiteral.time, GetTime() );
-        MemWrite( &item->messageColorLiteral.text, (uint64_t)txt );
-        MemWrite( &item->messageColorLiteral.b, uint8_t( ( color       ) & 0xFF ) );
-        MemWrite( &item->messageColorLiteral.g, uint8_t( ( color >> 8  ) & 0xFF ) );
-        MemWrite( &item->messageColorLiteral.r, uint8_t( ( color >> 16 ) & 0xFF ) );
-        TracyQueueCommit( messageColorLiteralThread );
+        TaggedUserlandAddress taggedPtr{ (uint64_t)txt, MakeMessageMetadata( source, severity ) };
+
+        if( color != 0 )
+        {
+            TracyQueuePrepare( callstack_depth == 0 ? QueueType::MessageLiteralColor : QueueType::MessageLiteralColorCallstack );
+            MemWrite( &item->messageColorLiteral.time, GetTime() );
+            MemWrite( &item->messageColorLiteral.textAndMetadata, taggedPtr );
+            MemWrite( &item->messageColorLiteral.b, uint8_t( ( color       ) & 0xFF ) );
+            MemWrite( &item->messageColorLiteral.g, uint8_t( ( color >> 8  ) & 0xFF ) );
+            MemWrite( &item->messageColorLiteral.r, uint8_t( ( color >> 16 ) & 0xFF ) );
+            TracyQueueCommit( messageColorLiteralThread );
+        }
+        else
+        {
+            TracyQueuePrepare( callstack_depth == 0 ? QueueType::MessageLiteral : QueueType::MessageLiteralCallstack );
+            MemWrite( &item->messageLiteral.time, GetTime() );
+            MemWrite( &item->messageLiteral.textAndMetadata, taggedPtr );
+            TracyQueueCommit( messageLiteralThread );
+        }
     }
+
 
     static tracy_force_inline void MessageAppInfo( const char* txt, size_t size )
     {
         assert( size < (std::numeric_limits<uint16_t>::max)() );
         auto ptr = (char*)tracy_malloc( size );
         memcpy( ptr, txt, size );
+        TaggedUserlandAddress taggedPtr{ (uint64_t)txt, MakeMessageMetadata( MessageSourceType::User, MessageSeverity::Info ) };
+
         TracyLfqPrepare( QueueType::MessageAppInfo );
         MemWrite( &item->messageFat.time, GetTime() );
-        MemWrite( &item->messageFat.text, (uint64_t)ptr );
+        MemWrite( &item->messageFat.textAndMetadata, taggedPtr );
         MemWrite( &item->messageFat.size, (uint16_t)size );
 
 #ifdef TRACY_ON_DEMAND
@@ -926,7 +828,6 @@ private:
     void AckServerQuery();
     void AckSymbolCodeNotAvailable();
 
-    void CalibrateTimer();
     void CalibrateDelay();
     void ReportTopology();
 
@@ -997,11 +898,6 @@ private:
         GetProfiler().m_serialQueue.commit_next();
     }
 
-#if defined _WIN32 && defined TRACY_TIMER_QPC
-    static int64_t GetTimeQpc();
-#endif
-
-    double m_timerMul;
     uint64_t m_resolution;
     std::atomic<int64_t> m_timeBegin;
     uint32_t m_mainThread;

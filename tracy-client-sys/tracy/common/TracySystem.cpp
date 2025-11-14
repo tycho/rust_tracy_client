@@ -8,11 +8,18 @@
 #  ifndef NOMINMAX
 #    define NOMINMAX
 #  endif
+#  define SECURITY_WIN32
 #  include <windows.h>
 #  include <malloc.h>
+#  include <lmcons.h>
+#  include <security.h>
 #  include "TracyWinFamily.hpp"
+#  ifdef _MSC_VER
+#    pragma comment(lib, "secur32.lib")
+#  endif
 #else
 #  include <pthread.h>
+#  include <pwd.h>
 #  include <string.h>
 #  include <unistd.h>
 #endif
@@ -333,6 +340,51 @@ TRACY_API const char* GetEnvVar( const char* name )
     return buffer;
 #else
     return getenv(name);
+#endif
+}
+
+TRACY_API const char* GetUserLogin()
+{
+#if defined _WIN32
+#  if defined TRACY_WIN32_NO_DESKTOP
+    return "(?)";
+#  else
+    DWORD userSz = UNLEN+1;
+    static char user[UNLEN+1];
+    GetUserNameA( user, &userSz );
+    return user;
+#  endif
+#elif defined __ANDROID__
+    const auto user = getlogin();
+    if( user ) return user;
+    return "(?)";
+#else
+    static char user[1024] = {};
+    getlogin_r( user, sizeof( user ) );
+    return user;
+#endif
+}
+
+TRACY_API const char* GetUserFullName()
+{
+#if defined _WIN32
+    static char buf[1024];
+    ULONG size = sizeof( buf );
+    if( GetUserNameExA( NameDisplay, buf, &size ) ) return buf;
+    return nullptr;
+#elif defined __ANDROID__
+    const auto passwd = getpwuid( getuid() );
+    if( passwd && *passwd->pw_gecos ) return passwd->pw_gecos;
+    return nullptr;
+#else
+    static char buf[4*1024];
+    struct passwd pwd;
+    struct passwd* ptr;
+    if( getpwuid_r( getuid(), &pwd, buf, sizeof( buf ), &ptr ) == 0 && ptr == &pwd && *pwd.pw_gecos )
+    {
+        return pwd.pw_gecos;
+    }
+    return nullptr;
 #endif
 }
 

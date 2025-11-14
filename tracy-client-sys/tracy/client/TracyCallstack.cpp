@@ -231,7 +231,7 @@ private:
         const auto startAddress = static_cast<uint64_t>( info->dlpi_addr );
         if( cache->ContainsImage( startAddress ) ) return 0;
 
-        const uint32_t headerCount = info->dlpi_phnum;
+        [[maybe_unused]] const uint32_t headerCount = info->dlpi_phnum;
         assert( headerCount > 0);
         const auto endAddress = static_cast<uint64_t>( info->dlpi_addr +
             info->dlpi_phdr[info->dlpi_phnum - 1].p_vaddr + info->dlpi_phdr[info->dlpi_phnum - 1].p_memsz);
@@ -369,6 +369,7 @@ extern "C"
     ___tracy_t_RtlWalkFrameChain ___tracy_RtlWalkFrameChainPtr = nullptr;
     TRACY_API unsigned long ___tracy_RtlWalkFrameChain( void** callers, unsigned long count, unsigned long flags)
     {
+        if( !___tracy_RtlWalkFrameChainPtr ) InitCallstackCritical();
         return ___tracy_RtlWalkFrameChainPtr(callers, count, flags);
     }
 }
@@ -393,7 +394,7 @@ void DbgHelpInit()
 #endif
 
     SymInitialize( GetCurrentProcess(), nullptr, true );
-    SymSetOptions( SYMOPT_LOAD_LINES );
+    SymSetOptions( SYMOPT_LOAD_LINES | SYMOPT_DEFERRED_LOADS );
 
 #ifdef TRACY_DBGHELP_LOCK
     DBGHELP_UNLOCK;
@@ -532,7 +533,7 @@ void InitCallstack()
 #endif //#ifndef TRACY_SYMBOL_OFFLINE_RESOLVE
     if( s_shouldResolveSymbolsOffline )
     {
-        TracyDebug("TRACY: enabling offline symbol resolving!\n");
+        TracyDebug( "TRACY: enabling offline symbol resolving!" );
     }
 
     CreateImageCaches();
@@ -551,7 +552,7 @@ void InitCallstack()
     const bool initTimeModuleLoad = !( noInitLoadEnv && noInitLoadEnv[0] == '1' );
     if ( !initTimeModuleLoad )
     {
-        TracyDebug("TRACY: skipping init time dbghelper module load\n");
+        TracyDebug( "TRACY: skipping init time dbghelper module load" );
     }
     else
     {
@@ -963,7 +964,7 @@ static void InitKernelSymbols()
     }
     assert( dst == s_kernelSym + validCnt );
 
-    TracyDebug( "Loaded %zu kernel symbols (%zu code sections)\n", tmpSym.size(), validCnt );
+    TracyDebug( "Loaded %zu kernel symbols (%zu code sections)", tmpSym.size(), validCnt );
 }
 #endif
 
@@ -1040,7 +1041,7 @@ void InitCallstack()
     if( s_shouldResolveSymbolsOffline )
     {
         cb_bts = nullptr; // disable use of libbacktrace calls
-        TracyDebug("TRACY: enabling offline symbol resolving!\n");
+        TracyDebug( "TRACY: enabling offline symbol resolving!" );
     }
     else
     {
@@ -1100,7 +1101,7 @@ int GetDebugInfoDescriptor( const char* buildid_data, size_t buildid_size, const
     it->filename = (char*)tracy_malloc( fnsz );
     memcpy( it->filename, filename, fnsz );
     it->fd = fd >= 0 ? fd : -1;
-    TracyDebug( "DebugInfo descriptor query: %i, fn: %s\n", fd, filename );
+    TracyDebug( "DebugInfo descriptor query: %i, fn: %s", fd, filename );
     return it->fd;
 }
 
