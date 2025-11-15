@@ -5,22 +5,15 @@ set -xe
 
 export PATH="$HOME/.cargo/bin/":"$PATH"
 
-if [ $# -eq 0 ]; then
-  LAST_RELEASE=($(curl -s "https://api.github.com/repos/wolfpld/tracy/releases/latest" \
-                    | jq -r '"\(.tag_name)\n\(.tarball_url)"'))
-else
-  LAST_RELEASE=($(curl -s "https://api.github.com/repos/wolfpld/tracy/releases/tags/$1" \
-                    | jq -r '"\(.tag_name)\n\(.tarball_url)"'))
-fi
+DESTINATION=tracy-git
 
-TAG="${LAST_RELEASE[0]}"
-TARBALL="${LAST_RELEASE[1]}"
-DESTINATION=/tmp/tracy-$TAG # could use mktemp, but unnecessary complexity.
+rm -rf "${DESTINATION}"
+git clone https://github.com/IntroversionSoftware/gamelibs-tracy.git "${DESTINATION}"
+
+TAG="$(cd tracy-git && git describe --tags --abbrev=0)"
 
 echo "tracy-tag=$TAG" >> "${GITHUB_OUTPUT:-/dev/stdout}"
-mkdir -p "$DESTINATION"
-curl -sL "$TARBALL" -o - | tar -f - -zxC "$DESTINATION"
-BASEDIR=("$DESTINATION"/*)
+BASEDIR="$(readlink -f $DESTINATION)"
 
 rm -rf "tracy-client-sys/tracy/"
 cp -r "$BASEDIR/public" "tracy-client-sys/tracy"
@@ -56,6 +49,8 @@ bindgen -o "tracy-client-sys/src/generated_fibers.rs" \
 
 # The space after type avoids hitting members called "type".
 sed -i 's/pub type /type /g' 'tracy-client-sys/src/generated.rs'
+
+rm -rf "${DESTINATION}"
 
 # Avoid running the other steps if we haven't really updated tracy (e.g. if bindgen/rustfmt version
 # changed)
