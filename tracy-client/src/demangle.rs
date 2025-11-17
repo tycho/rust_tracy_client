@@ -53,11 +53,22 @@ impl Buffer {
 ///
 /// See [the module-level documentation](self) for more information.
 pub fn default(s: &str, buffer: &mut impl fmt::Write) -> fmt::Result {
-    let Ok(demangled) = rustc_demangle::try_demangle(s) else {
-        return Err(fmt::Error);
-    };
-    // Use `:#` formatting to elide the hash.
-    write!(buffer, "{demangled:#}")
+    // Try Rust demangling
+    if let Ok(demangled) = rustc_demangle::try_demangle(s) {
+        // Use `:#` formatting to elide the hash.
+        write!(buffer, "{demangled:#}")?;
+        return Ok(());
+    }
+
+    // Try C++ demangling (Itanium ABI)
+    if let Ok(sym) = cpp_demangle::Symbol::new(s.as_bytes()) {
+        let demangled = sym.demangle()?;
+        buffer.write_str(&demangled)?;
+        return Ok(());
+    }
+
+    // Neither Rust nor C++ demangling worked.
+    Err(fmt::Error)
 }
 
 /// Symbol demangler that does nothing.
