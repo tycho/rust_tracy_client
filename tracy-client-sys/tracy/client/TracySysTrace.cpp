@@ -898,10 +898,8 @@ bool SysTraceStart( int64_t& samplingPeriod )
             pe.inherit = 1;
             pe.config = wakingId;
             pe.read_format = 0;
-#if !defined TRACY_HW_TIMER || !( defined __i386 || defined _M_IX86 || defined __x86_64__ || defined _M_X64 )
             pe.use_clockid = 1;
             pe.clockid = CLOCK_MONOTONIC_RAW;
-#endif
 
             TracyDebug( "Setup waking up capture" );
             for( int i=0; i<s_numCpus; i++ )
@@ -1150,7 +1148,7 @@ void SysTraceWorker( void* ptr )
                 {
                     // Find the earliest event from the active buffers
                     int sel = -1;
-                    int selPos = 0;
+                    int selPos;
                     int64_t t0 = std::numeric_limits<int64_t>::max();
                     for( int i=0; i<activeNum; i++ )
                     {

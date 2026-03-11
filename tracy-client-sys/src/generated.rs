@@ -3,6 +3,13 @@ pub const TracyPlotFormatEnum_TracyPlotFormatMemory: TracyPlotFormatEnum = 1;
 pub const TracyPlotFormatEnum_TracyPlotFormatPercentage: TracyPlotFormatEnum = 2;
 pub const TracyPlotFormatEnum_TracyPlotFormatWatt: TracyPlotFormatEnum = 3;
 type TracyPlotFormatEnum = ::std::os::raw::c_uint;
+pub const TracyMessageSeverity_TracyMessageSeverityTrace: TracyMessageSeverity = 0;
+pub const TracyMessageSeverity_TracyMessageSeverityDebug: TracyMessageSeverity = 1;
+pub const TracyMessageSeverity_TracyMessageSeverityInfo: TracyMessageSeverity = 2;
+pub const TracyMessageSeverity_TracyMessageSeverityWarning: TracyMessageSeverity = 3;
+pub const TracyMessageSeverity_TracyMessageSeverityError: TracyMessageSeverity = 4;
+pub const TracyMessageSeverity_TracyMessageSeverityFatal: TracyMessageSeverity = 5;
+type TracyMessageSeverity = ::std::os::raw::c_uint;
 extern "C" {
     pub fn ___tracy_set_thread_name(name: *const ::std::os::raw::c_char);
 }
@@ -605,28 +612,20 @@ extern "C" {
     );
 }
 extern "C" {
-    pub fn ___tracy_emit_message(
-        txt: *const ::std::os::raw::c_char,
-        size: usize,
+    pub fn ___tracy_emit_logString(
+        severity: i8,
+        color: i32,
         callstack_depth: i32,
+        size: usize,
+        txt: *const ::std::os::raw::c_char,
     );
 }
 extern "C" {
-    pub fn ___tracy_emit_messageL(txt: *const ::std::os::raw::c_char, callstack_depth: i32);
-}
-extern "C" {
-    pub fn ___tracy_emit_messageC(
-        txt: *const ::std::os::raw::c_char,
-        size: usize,
-        color: u32,
+    pub fn ___tracy_emit_logStringL(
+        severity: i8,
+        color: i32,
         callstack_depth: i32,
-    );
-}
-extern "C" {
-    pub fn ___tracy_emit_messageLC(
         txt: *const ::std::os::raw::c_char,
-        color: u32,
-        callstack_depth: i32,
     );
 }
 extern "C" {

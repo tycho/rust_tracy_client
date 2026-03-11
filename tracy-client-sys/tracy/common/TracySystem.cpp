@@ -168,26 +168,22 @@ TRACY_API void SetThreadNameWithHint( const char* name, int32_t groupHint )
     }
 #elif defined _GNU_SOURCE && !defined __EMSCRIPTEN__
     {
+#if defined __APPLE__
+        pthread_setname_np( name );
+#else
         const auto sz = strlen( name );
         if( sz <= 15 )
         {
-#if defined __APPLE__
-            pthread_setname_np( name );
-#else
             pthread_setname_np( pthread_self(), name );
-#endif
         }
         else
         {
             char buf[16];
             memcpy( buf, name, 15 );
             buf[15] = '\0';
-#if defined __APPLE__
-            pthread_setname_np( buf );
-#else
             pthread_setname_np( pthread_self(), buf );
-#endif
         }
+#endif
     }
 #elif defined __QNX__
     {
@@ -374,7 +370,7 @@ TRACY_API const char* GetUserFullName()
     return nullptr;
 #elif defined __ANDROID__
     const auto passwd = getpwuid( getuid() );
-    if( passwd && *passwd->pw_gecos ) return passwd->pw_gecos;
+    if( passwd && passwd->pw_gecos && *passwd->pw_gecos ) return passwd->pw_gecos;
     return nullptr;
 #else
     static char buf[4*1024];

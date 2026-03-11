@@ -410,7 +410,7 @@ mod utils {
             }
         }
 
-        pub fn acquire(&self) -> StrCacheGuard {
+        pub fn acquire(&self) -> StrCacheGuard<'_> {
             StrCacheGuard::new(
                 self,
                 self.str_bufs

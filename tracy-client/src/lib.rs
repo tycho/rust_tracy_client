@@ -139,8 +139,15 @@ impl Client {
         #[cfg(feature = "enable")]
         unsafe {
             let stack_depth = adjust_stack_depth(callstack_depth).into();
-            let () =
-                sys::___tracy_emit_message(message.as_ptr().cast(), message.len(), stack_depth);
+            let () = sys::___tracy_emit_logString(
+                sys::TracyMessageSeverity_TracyMessageSeverityInfo
+                    .try_into()
+                    .unwrap(),
+                0,
+                stack_depth,
+                message.len(),
+                message.as_ptr().cast(),
+            );
         }
     }
 
@@ -156,11 +163,14 @@ impl Client {
         #[cfg(feature = "enable")]
         unsafe {
             let depth = adjust_stack_depth(callstack_depth).into();
-            let () = sys::___tracy_emit_messageC(
-                message.as_ptr().cast(),
-                message.len(),
-                rgba >> 8,
+            let () = sys::___tracy_emit_logString(
+                sys::TracyMessageSeverity_TracyMessageSeverityInfo
+                    .try_into()
+                    .unwrap(),
+                (rgba >> 8).try_into().unwrap(),
                 depth,
+                message.len(),
+                message.as_ptr().cast(),
             );
         }
     }

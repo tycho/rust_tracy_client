@@ -284,7 +284,7 @@ static bool EnsureReadable( uintptr_t address )
     return mapping && EnsureReadable( *mapping );
 }
 #elif defined WIN32
-[[maybe_unused]] static bool EnsureReadable( uintptr_t address )
+static bool EnsureReadable( uintptr_t address )
 {
     // Attempts to read an address with ReadProcessMemory. Trying to read an
     // invalid address will ordinarily result in a crash, but ReadProcessMemory
@@ -294,7 +294,7 @@ static bool EnsureReadable( uintptr_t address )
     return ReadProcessMemory(GetCurrentProcess(), (LPVOID)address, &testRead, 1, &bytesRead) != 0 && bytesRead == 1;
 }
 #else
-[[maybe_unused]] static bool EnsureReadable( uintptr_t address )
+static bool EnsureReadable( uintptr_t address )
 {
     return true;
 }
@@ -561,7 +561,7 @@ static const char* GetHostInfo()
     FILE* fcpuinfo = fopen( "/proc/cpuinfo", "rb" );
     if( fcpuinfo )
     {
-        enum { BufSize = 4*1024 };
+        constexpr size_t BufSize = 4*1024;
         char buf[BufSize];
         const auto sz = fread( buf, 1, BufSize, fcpuinfo );
         fclose( fcpuinfo );
@@ -772,7 +772,8 @@ LONG WINAPI CrashFilter( PEXCEPTION_POINTERS pExp )
     }
 
     {
-        GetProfiler().SendCallstack( 60, "KiUserExceptionDispatcher" );
+        const char* remove[] = { "KiUserExceptionDispatcher", nullptr };
+        GetProfiler().SendCallstack( 60, remove );
 
         TracyQueuePrepare( QueueType::CrashReport );
         item->crashReport.time = Profiler::GetTime();
@@ -882,7 +883,7 @@ static inline void HexPrint( char*& ptr, uint64_t val )
     while( bptr != buf );
 }
 
-static void CrashHandler( int signal, siginfo_t* info, void* /*ucontext*/ )
+TRACY_API void TracyCrashHandler( int signal, siginfo_t* info, void* /*ucontext*/ )
 {
     bool expected = false;
     if( !s_alreadyCrashed.compare_exchange_strong( expected, true ) ) ThreadFreezer( signal );
@@ -1034,7 +1035,12 @@ static void CrashHandler( int signal, siginfo_t* info, void* /*ucontext*/ )
     }
 
     {
-        GetProfiler().SendCallstack( 60, "__kernel_rt_sigreturn" );
+        const char* remove[] = {
+            "__kernel_rt_sigreturn",
+            "TracyCrashHandler",
+            nullptr
+        };
+        GetProfiler().SendCallstack( 60, remove );
 
         TracyQueuePrepare( QueueType::CrashReport );
         item->crashReport.time = Profiler::GetTime();
@@ -1125,7 +1131,7 @@ void Profiler::EndSamplingProfiling()
 #endif
 }
 
-enum { QueuePrealloc = 256 * 1024 };
+constexpr size_t QueuePrealloc = 256 * 1024;
 
 #ifdef TRACY_DELAYED_INIT
 struct ThreadNameData;
@@ -1459,7 +1465,7 @@ void Profiler::InstallCrashHandler()
     sigaction( TRACY_CRASH_SIGNAL, &threadFreezer, &m_prevSignal.pwr );
 
     struct sigaction crashHandler = {};
-    crashHandler.sa_sigaction = CrashHandler;
+    crashHandler.sa_sigaction = TracyCrashHandler;
     crashHandler.sa_flags = SA_SIGINFO;
     sigaction( SIGILL, &crashHandler, &m_prevSignal.ill );
     sigaction( SIGFPE, &crashHandler, &m_prevSignal.fpe );
@@ -1497,7 +1503,7 @@ void Profiler::RemoveCrashHandler()
         auto restore = []( int signum, struct sigaction* prev ) {
             struct sigaction old;
             sigaction( signum, prev, &old );
-            if( old.sa_sigaction != CrashHandler ) sigaction( signum, &old, nullptr ); // A different signal handler was installed over ours => put it back
+            if( old.sa_sigaction != TracyCrashHandler ) sigaction( signum, &old, nullptr ); // A different signal handler was installed over ours => put it back
         };
         restore( TRACY_CRASH_SIGNAL, &m_prevSignal.pwr );
         restore( SIGILL, &m_prevSignal.ill );
@@ -2460,7 +2466,8 @@ Profiler::DequeueStatus Profiler::Dequeue( moodycamel::ConsumerToken& token )
                         ptr = MemRead<uint64_t>( &item->callstackAllocFat.nativePtr );
                         if( ptr != 0 )
                         {
-                            CutCallstack( (void*)ptr, "lua_pcall" );
+                            const char* remove[] = { "lua_pcall", nullptr };
+                            CutCallstack( (void*)ptr, remove );
                             SendCallstackPayload( ptr );
                             tracy_free_fast( (void*)ptr );
                         }
@@ -2997,7 +3004,8 @@ Profiler::DequeueStatus Profiler::DequeueSerial()
                     ptr = MemRead<uint64_t>( &item->callstackAllocFat.nativePtr );
                     if( ptr != 0 )
                     {
-                        CutCallstack( (void*)ptr, "lua_pcall" );
+                        const char* remove[] = { "lua_pcall", nullptr };
+                        CutCallstack( (void*)ptr, remove );
                         SendCallstackPayload( ptr );
                         tracy_free_fast( (void*)ptr );
                     }
@@ -3787,7 +3795,7 @@ void Profiler::ReportTopology()
     if( GetLastError() == ERROR_INSUFFICIENT_BUFFER )
     {
         packageInfo = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)tracy_malloc( psz );
-        [[maybe_unused]] auto res = _GetLogicalProcessorInformationEx( RelationProcessorPackage, packageInfo, &psz );
+        auto res = _GetLogicalProcessorInformationEx( RelationProcessorPackage, packageInfo, &psz );
         assert( res );
     }
     else
@@ -3800,7 +3808,7 @@ void Profiler::ReportTopology()
     if( GetLastError() == ERROR_INSUFFICIENT_BUFFER )
     {
         dieInfo = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)tracy_malloc( dsz );
-        [[maybe_unused]] auto res = _GetLogicalProcessorInformationEx( RelationProcessorDie, dieInfo, &dsz );
+        auto res = _GetLogicalProcessorInformationEx( RelationProcessorDie, dieInfo, &dsz );
         assert( res );
     }
     else
@@ -3813,7 +3821,7 @@ void Profiler::ReportTopology()
     if( GetLastError() == ERROR_INSUFFICIENT_BUFFER )
     {
         coreInfo = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)tracy_malloc( csz );
-        [[maybe_unused]] auto res = _GetLogicalProcessorInformationEx( RelationProcessorCore, coreInfo, &csz );
+        auto res = _GetLogicalProcessorInformationEx( RelationProcessorCore, coreInfo, &csz );
         assert( res );
     }
     else
@@ -3969,7 +3977,7 @@ void Profiler::ReportTopology()
 #endif
 }
 
-void Profiler::SendCallstack( int32_t depth, const char* skipBefore )
+void Profiler::SendCallstack( int32_t depth, const char** skipBefore )
 {
 #ifdef TRACY_HAS_CALLSTACK
     auto ptr = Callstack( depth );
@@ -3981,23 +3989,29 @@ void Profiler::SendCallstack( int32_t depth, const char* skipBefore )
 #endif
 }
 
-void Profiler::CutCallstack( void* callstack, const char* skipBefore )
+void Profiler::CutCallstack( void* callstack, const char** skipBefore )
 {
 #ifdef TRACY_HAS_CALLSTACK
     auto data = (uintptr_t*)callstack;
     const auto sz = *data++;
     uintptr_t i;
-    for( i=0; i<sz; i++ )
+    while( *skipBefore )
     {
-        auto name = DecodeCallstackPtrFast( uint64_t( data[i] ) );
-        const bool found = strcmp( name, skipBefore ) == 0;
-        if( found )
+        for( i=0; i<sz; i++ )
         {
-            i++;
-            break;
+            auto name = DecodeCallstackPtrFast( uint64_t( data[i] ) );
+            const bool found = strstr( name, *skipBefore ) != nullptr;
+            if( found )
+            {
+                i++;
+                goto found;
+            }
         }
+        skipBefore++;
     }
+    return;
 
+found:
     if( i != sz )
     {
         memmove( data, data + i, ( sz - i ) * sizeof( uintptr_t* ) );

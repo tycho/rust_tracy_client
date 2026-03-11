@@ -37,9 +37,6 @@
 #define TRACY_LIKELY_X86
 #endif
 
-#undef TRACY_HAVE_CPU_CLOCK
-#undef TRACY_HAVE_CPU_CLOCK_KNOWN_FREQUENCY
-
 namespace tracy
 {
 namespace timers
@@ -96,48 +93,6 @@ static tracy_force_inline int64_t query_performance_counter()
 }
 #endif
 
-#if !defined(TRACY_HAVE_CPU_CLOCK)
-#if defined(_M_ARM64)
-#define TRACY_HAVE_CPU_CLOCK
-#define TRACY_HAVE_CPU_CLOCK_KNOWN_FREQUENCY
-#ifndef ARM64_CNTVCT
-#define ARM64_CNTVCT ARM64_SYSREG(3, 3, 14, 0, 2)
-#endif
-#ifndef ARM64_CNTFRQ
-#define ARM64_CNTFRQ ARM64_SYSREG(3, 3, 14, 0, 0)
-#endif
-#pragma intrinsic(_ReadStatusReg)
-tracy_force_inline unsigned long long read_cpu_clock()
-{
-    return _ReadStatusReg(ARM64_CNTVCT);
-}
-tracy_force_inline unsigned long long read_cpu_clock_freq()
-{
-    return _ReadStatusReg(ARM64_CNTFRQ);
-}
-#endif
-#endif
-
-#if !defined(TRACY_HAVE_CPU_CLOCK)
-#if defined(__aarch64__) || (defined(_M_ARM64) && defined(__clang__))
-#define TRACY_HAVE_CPU_CLOCK
-#define TRACY_HAVE_CPU_CLOCK_KNOWN_FREQUENCY
-tracy_force_inline unsigned long long read_cpu_clock()
-{
-    unsigned long long cval;
-    asm volatile("mrs %0, cntvct_el0"
-                 : "=r"(cval));
-    return cval;
-}
-tracy_force_inline unsigned long long read_cpu_clock_freq()
-{
-    unsigned long long cval;
-    asm volatile("mrs %0, cntfrq_el0"
-                 : "=r"(cval));
-    return cval;
-}
-#endif
-#endif
 } // namespace detail
 
 //
@@ -216,36 +171,6 @@ public:
 };
 #endif
 
-#if defined(TRACY_HAVE_CPU_CLOCK_KNOWN_FREQUENCY)
-struct cpu_clock
-{
-public:
-    using duration = std::chrono::nanoseconds;
-    using rep = duration::rep;
-    using period = duration::period;
-    using time_point = std::chrono::time_point<cpu_clock>;
-    static const bool is_steady = true;
-
-private:
-    static tracy_no_inline int64_t cpu_clock_scale_dispatch(int64_t _freq, int64_t _counter)
-    {
-        switch (_freq) {
-        TRACY_LIKELY_ARM case 24000000LL: return detail::clock_scale_24MHz(_counter, period::den);
-        }
-        return detail::clock_scale_generic(_freq, _counter, period::den);
-    }
-
-public:
-    static time_point now() noexcept
-    {
-        static_assert(period::num == 1, "This assumes period::num == 1");
-        const int64_t freq = detail::read_cpu_clock_freq();
-        const int64_t counter = detail::read_cpu_clock();
-        return time_point(duration(cpu_clock_scale_dispatch(freq, counter)));
-    }
-};
-#endif
-
 } // namespace timers
 
 #if defined(TRACY_TIMER_FALLBACK)
@@ -254,9 +179,7 @@ using high_res_time = std::chrono::steady_clock;
 
 #else
 
-#if defined(TRACY_HAVE_CPU_CLOCK_KNOWN_FREQUENCY)
-using high_res_time = timers::cpu_clock;
-#elif defined(CLOCK_MONOTONIC_RAW)
+#if defined(CLOCK_MONOTONIC_RAW)
 using high_res_time = timers::monotonic_raw;
 #elif defined(CLOCK_MONOTONIC)
 using high_res_time = timers::monotonic;
@@ -272,7 +195,5 @@ using high_res_time = std::chrono::steady_clock;
 
 #undef TRACY_LIKELY_X86
 #undef TRACY_LIKELY_ARM
-#undef TRACY_HAVE_CPU_CLOCK
-#undef TRACY_HAVE_CPU_CLOCK_KNOWN_FREQUENCY
 
 #endif
